@@ -223,18 +223,22 @@
         });
     }
 
-    function findBend(boxes, start, end) {
+    function findBend(routes, start, end) {
         let latestStart = end.x;
         let earliestEnd = start.x;
-        for (const box of boxes) {
-            if (box.bottom < start.y && start.y < box.top) latestStart = Math.min(latestStart, box.left);
-            if (box.bottom < end.y && end.y < box.top) earliestEnd = Math.max(earliestEnd, box.right);
+        const blockers = [];
+        for (const route of routes) {
+            for (const box of route.obstacles) {
+                if (box.bottom < start.y && start.y < box.top) latestStart = Math.min(latestStart, box.left);
+                if (box.bottom < route.end.y && route.end.y < box.top) earliestEnd = Math.max(earliestEnd, box.right);
+                blockers.push(box);
+            }
         }
 
         let left = start.x;
         let widest = 2;
         let bend;
-        const blockers = [...boxes].sort((a, b) => a.left - b.left);
+        blockers.sort((a, b) => a.left - b.left);
         for (const box of [...blockers, { left: end.x, right: end.x }]) {
             const right = Math.min(end.x, box.left);
             if (left <= latestStart && right >= earliestEnd && right - left > widest) {
@@ -246,7 +250,7 @@
         return bend;
     }
 
-    function routeEdge(pos, from, to, boxes) {
+    function prepareEdge(pos, from, to, boxes) {
         if (!pos) return;
         const [arrow, tail] = pos.split(/\s+/);
         if (!arrow.startsWith("e,") || !tail) return;
@@ -264,21 +268,34 @@
             left: box.left - padding, right: box.right + padding,
             bottom: box.bottom - padding, top: box.top + padding,
         }));
+        return { target: to.name, tipX: to.left, start, end, obstacles };
+    }
 
-        const control = [0.5, 0.75, 0.25].find(value => curveClears(obstacles, start, end, value));
-        const bend = control === undefined ? findBend(obstacles, start, end) : [start.x, end.x];
-        if (!bend) return; // Graphviz can route around obstacles that need more than one bend.
+    function routePort(routes, positions) {
+        if (routes.some(route => !route)) return;
+        const { start, end } = routes[0];
+        if (routes.some(route => route.start.y !== start.y || route.end.x !== end.x)) return;
 
+        // Edges leaving the same field use the same horizontal curve coordinates,
+        // so they keep their vertical order as they fan out.
+        const control = [0.5, 0.75, 0.25].find(value =>
+            routes.every(route => curveClears(route.obstacles, start, route.end, value))
+        );
+        const bend = control === undefined ? findBend(routes, start, end) : [start.x, end.x];
+        if (!bend) return; // Let Graphviz route this entire set of edges.
         const [left, right] = bend;
         const middle = left + (right - left) * (control ?? 0.5);
-        const points = [[start.x, start.y]];
-        const addHorizontal = (a, b, y) => {
-            if (a < b) points.push([a + (b - a) / 3, y], [a + 2 * (b - a) / 3, y], [b, y]);
-        };
-        addHorizontal(start.x, left, start.y);
-        points.push([middle, start.y], [middle, end.y], [right, end.y]);
-        addHorizontal(right, end.x, end.y);
-        return `e,${to.left.toFixed(3)},${end.y} ${points.map(([x, y]) => `${x.toFixed(3)},${y}`).join(" ")}`;
+        for (const route of routes) {
+            const points = [[start.x, start.y]];
+            const addHorizontal = (a, b, y) => {
+                if (a < b) points.push([a + (b - a) / 3, y], [a + 2 * (b - a) / 3, y], [b, y]);
+            };
+            addHorizontal(start.x, left, start.y);
+            points.push([middle, start.y], [middle, route.end.y], [right, route.end.y]);
+            addHorizontal(right, end.x, route.end.y);
+            const curve = points.map(([x, y]) => `${x.toFixed(3)},${y}`).join(" ");
+            positions.set(route.target, `e,${route.tipX.toFixed(3)},${route.end.y} ${curve}`);
+        }
     }
 
     function leftAlignDot(tree, { objects, edges = [] }) {
@@ -308,12 +325,15 @@
             }
         }
 
-        const edgePositions = new Map();
-        for (const { tail, head, pos } of edges) {
-            const to = boxes[head];
-            const position = routeEdge(pos, boxes[tail], to, placed);
-            if (position) edgePositions.set(to.name, position);
+        const ports = new Map();
+        for (const { tail, head, tailport, pos } of edges) {
+            const key = `${tail}:${tailport}`;
+            const routes = ports.get(key) ?? [];
+            routes.push(prepareEdge(pos, boxes[tail], boxes[head], placed));
+            ports.set(key, routes);
         }
+        const edgePositions = new Map();
+        for (const routes of ports.values()) routePort(routes, edgePositions);
         return writeDot(tree, { nodes: nodePositions, edges: edgePositions });
     }
 

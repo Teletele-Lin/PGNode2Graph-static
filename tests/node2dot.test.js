@@ -94,3 +94,25 @@ test("moves a child column closer to its parent and uses a single curve in clear
     assert.ok(curves.every(points => points.length === 4));
     assert.ok(curves.some(points => points[0][1] !== points[3][1]));
 });
+
+test("branches a shared args port without crossing its own edges", async () => {
+    const vars = "{VAR} ".repeat(16);
+    const input = `{QUERY :utilityStmt ({EXPLAINSTMT :query ({QUERY
+        :rtable ({RANGETBLENTRY} {RANGETBLENTRY} {RANGETBLENTRY :joinaliasvars (${vars})} {RANGETBLENTRY})
+        :groupClause ({SORTGROUPCLAUSE} {SORTGROUPCLAUSE})
+        :havingQual ({OPEXPR :opno 419 :opresulttype 16 :args ({AGGREF} {CONST}) :location -1})
+        :sortClause ({SORTGROUPCLAUSE :nulls_first true})})})}`;
+    const tree = node2dot(input, { skipEmpty: true });
+    const viz = await Viz.instance();
+    const layout = JSON.parse(viz.renderString(tree.dot, { format: "json0" }));
+    const rendered = viz.renderJSON(leftAlignDot(tree, layout));
+    const operator = tree.nodes.findIndex(node => node.tag === "OPEXPR");
+    const curves = rendered.edges.filter(edge => edge.tail === operator).map(edge =>
+        edge._draw_.find(command => command.op === "b").points
+    );
+    assert.equal(curves.length, 2);
+    const [first, second] = curves;
+    assert.deepEqual(first[0], second[0]);
+    assert.deepEqual(first.map(([x]) => x), second.map(([x]) => x));
+    assert.notEqual(first.at(-1)[1], second.at(-1)[1]);
+});
