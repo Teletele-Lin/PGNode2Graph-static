@@ -228,9 +228,11 @@ async function renderCurrent({ trigger, record = false }) {
         const viz = await renderer;
         // Give the browser a chance to paint the status before Graphviz lays out the tree.
         await new Promise(resolve => setTimeout(resolve, 0));
-        const svgText = viz.renderString(tree.dot, { format: "svg" });
+        const layout = JSON.parse(viz.renderString(tree.dot, { format: "json0" }));
+        const dot = PGNode2Dot.leftAlignDot(tree, layout);
+        const svgText = viz.renderString(dot, { format: "svg" });
         const svg = new DOMParser().parseFromString(svgText, "image/svg+xml").documentElement;
-        mountGraph(tree, svgText, svg);
+        mountGraph({ ...tree, dot }, svgText, svg);
         reopenButton.hidden = false;
         openGraphViewer(trigger);
         const saved = !record || saveHistory(input, options, tree);
